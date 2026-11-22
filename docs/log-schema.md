@@ -4,6 +4,8 @@
 内側のループにLLMは入らず、解読（文章化）はこのログを読む側の仕事である。
 コストは「回した量」ではなく「読んだ量」に比例する、という設計の要。
 
+**v2（2026-11-21）**：感情判定サンプル仕様 v0.6（`docs/appraisal-sample-spec-v0.6.md`）の §9.1〜§9.3 に対応し、一部のイベントに `appraisal` キー（後述）を追加した。`appraisal` キーを外せば v1 と同じ1行に戻る。あわせて、個体ごとの感情係数（§9.2）と、摩擦の強さ方式（§9.3-1）を設定で選べるようにした。
+
 ## 共通フィールド
 
 | フィールド | 型 | 意味 |
@@ -17,6 +19,29 @@
 | `target` | string \| null | **対象**の個体ID。相手がいるイベントでは必ず入る。個体が増えたときの移行コストを消すため、1:1の現状でも冗長に持たせる（設計メモ決定事項）。単独イベントでは `null` |
 | `effects` | object? | 感情の変化。`{個体ID: {次元: 変化量}}` の形で、変化量は状態値（0..1）の実増減。0の次元は省略される |
 | `detail` | object? | 種別ごとの補足（閾値・距離・結果など） |
+| `appraisal` | object? | v2で追加（下記）。サンプルにする種別（NOTICE・LOST_SIGHT・REACT・CONTACT・FRICTION・FIGHT・APOLOGY）にだけ付く |
+
+## appraisal（v2）
+
+感情判定のサンプル作りの正本データ。出来事ごと・関わった個体ごとに、その出来事で「切られる前の点数」と「直前の状態」を記録する。`effects`（0..1に切ったあとの実増減）からは正解を作らない、という仕様 §9.1 の決定を受けたもの。
+
+```
+"appraisal": {
+  "A": {
+    "state_before": {"joy": 0.29, "sadness": 0.05, ...},   // その出来事の直前の8次元
+    "points_pre":  {"anger": 8.0, "trust": -2.0},          // 慣れの割引のあと・係数の前の点数
+    "points_post": {"anger": 8.0, "trust": -2.0},          // 係数を掛けたあとの点数（状態に足されるのはこちら）
+    "grudge": false                                        // 恨みで点数が変わったか
+  },
+  "B": { ... }
+}
+```
+
+- **関わった個体**：片方だけが感じる出来事（NOTICE・LOST_SIGHT・REACT）は感じた側だけ。CONTACT・FRICTION・FIGHT・APOLOGY は二人とも。点数が全部0でも記録する（`no_change` と「関わっていない」を分けるため）。記録のない次元は点数0として扱う。
+- **points_pre / points_post**：点数は「表の点数 → 慣れの割引 → 恨みの割引（×0.4）→ 係数」の順で加工され、`points_pre` は係数の直前、`points_post` は係数の直後の値。状態への反映は `points_post × point_scale` を 0..1 に切って行われる。
+- **grudge**：恨みの割引（好意・喜びのプラスの ×0.4）が効いたときと、気づいたときの再燃（NOTICE の `detail.grudge_reignite`）の両方で `true` になる。仕様 §9.3-2 により、この印のある件はサンプルから外す。
+- **係数（§9.2）**：`config` の `individuals.<ID>.coefficients` に次元ごとの係数を持てる（既定はすべて 1.0）。掛けるのは点数だけで、半減期・閾値・ERODE には掛けない。
+- **摩擦の強さ方式（§9.3-1）**：`contact.friction_mode` が `"strength"` のとき、摩擦ごとに強さを3段階（重み `contact.friction_strength_weights`、既定は均等）から一度だけ選び、二人に同じ怒りの点数（`contact.friction_strength_anger_points`、既定は 2・5・8）が当たる。選んだ段階は `detail.strength_stage`（1・2・3）と `detail.strength_anger_points` に残る。既定の `"per_person"` は従来どおり個体ごとに jitter でばらつく。
 
 感情次元は8つ：`joy`（喜び）`sadness`（悲しみ）`anger`（怒り）`fear`（不安）`surprise`（驚き）`affection`（好意）`trust`（信頼）`fatigue`（疲労）。
 いずれも 0..1 で、ベースラインと半減期は `config/default.json` の `emotions.dimensions` に従う。
@@ -31,7 +56,7 @@
 | `SURVIVAL` | `food` / `rest` | 本人 / 相手 | 空腹・体力が限界域（空腹 ≥ 0.9 / 体力 ≤ 0.1）に入り、生存系が感情の割り込みを上書きした。発動した瞬間に1回だけ記録 |
 | `REACT` | `avoided` / `mutual_approach` | 反応した側 / 相手 | 相手の反応を見たことによる感情変化。`avoided`：接近したのに相手が離れた（接近感情が怒りなら怒り増幅、好意なら不安・悲しみ）。`mutual_approach`：互いに接近し合い、不安が下がる |
 | `CONTACT` | `greet` / `together` / `keep_distance` | A / B（ペア） | 隣接時の接触の解決結果。`greet`：挨拶・会話（片方が温かい、または両者平常）。`together`：両者の好意が支配的で一緒に過ごす（連続接触で増分が割り引かれる＝慣れ。`detail.habituation_factor`）。`keep_distance`：不安が強い側が距離を取る |
-| `FRICTION` | — | A / B（ペア） | 事故（摩擦イベント）。接触ごとに約8%で発生し、両者に怒り+・信頼−を与える「怒りの種」。怒りの量は個体ごとに僅かにばらつく（受け取り方の差） |
+| `FRICTION` | — | A / B（ペア） | 事故（摩擦イベント）。接触ごとに約8%で発生し、両者に怒り+・信頼−を与える「怒りの種」。既定では怒りの量は個体ごとに僅かにばらつく（受け取り方の差）。`friction_mode: "strength"` のときは強さ3段階を一度だけ選び二人に同じ値が当たる（上記 appraisal の節を参照） |
 | `APOLOGY` | — | 謝る側 / 謝られる側 | 片方だけが怒り、もう片方が温かい（好意・信頼が高い）ときに起きる謝罪の試行。`detail.result` が `accepted`（怒り−中・信頼+）/ `rejected`（相手の怒りが深すぎて届かず、謝った側の好意が少し下がる） |
 | `FIGHT` | — | A / B（ペア） | 両者が怒り支配的で接触し、喧嘩になった。両者 怒り+・好意−。直後に各自 `AVOID start` が続く |
 | `AVOID` | `start` / `end` | 回避する側 / 相手 | 回避モードの開始・終了。回避中は感情の割り込みが抑えられ、相手から離れることが目的地になる。ただし怒りが本人の割り込み閾値以上に達した場合は例外で、回避を破って相手へ向かう（`INTERRUPT` が優先）。怒りが下限以下に下がると終了 |

@@ -23,7 +23,7 @@ from __future__ import annotations
 import random
 
 from .diary import get_provider
-from .emotions import EmotionState
+from .emotions import DIMENSIONS, EmotionState
 
 TOWARD_FOR_INTERRUPT = ("affection", "anger", "fear")
 
@@ -50,6 +50,12 @@ class Individual:
     def __init__(self, ind_id: str, cfg: dict, emotions: EmotionState, start: list[int]):
         self.id = ind_id
         self.threshold = float(cfg["interrupt_threshold"])
+        # Per-dimension coefficients (spec v0.6 section 9.2): applied to
+        # points only, at the moment points are added to the state.
+        # Missing entries default to 1.0 (no change in behaviour).
+        coef_cfg = cfg.get("coefficients") or {}
+        self.coefficients = {
+            dim: float(coef_cfg.get(dim, 1.0)) for dim in DIMENSIONS}
         self.emotions = emotions
         self.pos = [int(start[0]), int(start[1])]
         # body state: hunger / sleepiness grow toward 1; stamina drains toward 0
@@ -120,6 +126,10 @@ class Simulation:
         self.pair_consecutive_contacts = 0
         self.visible_prev = {"A": False, "B": False}
         self.diary_provider = get_provider(config["diary"]["provider"])
+        # Log v2 capture (spec v0.6 section 9.1): while an event's effects
+        # are being applied, apply_points records the pre-clamp points into
+        # this dict; the event's _log call takes it as its `appraisal` key.
+        self._capture: dict | None = None
 
     # ------------------------------------------------------------------
     # small utilities
@@ -146,7 +156,8 @@ class Simulation:
 
     def _log(self, type_: str, actor: str | None, target: str | None,
              kind: str | None = None, effects: dict | None = None,
-             detail: dict | None = None) -> dict:
+             detail: dict | None = None,
+             appraisal: dict | None = None) -> dict:
         event = {
             "step": self.step_count,
             "day": self.day_number(),
@@ -167,14 +178,55 @@ class Simulation:
                 del event["effects"]
         if detail:
             event["detail"] = detail
+        if appraisal:
+            event["appraisal"] = appraisal
         self.events.append(event)
         return event
+
+    # -- log v2 capture (spec v0.6 section 9.1) ---------------------------
+    def _begin_capture(self, ind_ids: list[str]) -> None:
+        """Start recording appraisal data for the given involved individuals.
+
+        Snapshots each individual's 8-dimension state *before* the event's
+        points are applied; apply_points then accumulates the pre-clamp
+        points (before / after the individual's coefficient) and the grudge
+        flag into the record. Individuals are recorded even when every
+        point ends up 0, so a recorded no-change is distinguishable from
+        "not involved".
+        """
+        self._capture = {
+            ind_id: {
+                "state_before": {
+                    dim: round(self.individuals[ind_id].emotions.get(dim), 4)
+                    for dim in DIMENSIONS
+                },
+                "points_pre": {},
+                "points_post": {},
+                "grudge": False,
+            }
+            for ind_id in ind_ids
+        }
+
+    def _take_capture(self) -> dict | None:
+        capture, self._capture = self._capture, None
+        return capture
+
+    def _mark_grudge(self, ind: Individual) -> None:
+        if self._capture is not None and ind.id in self._capture:
+            self._capture[ind.id]["grudge"] = True
 
     def apply_points(self, ind: Individual, dim: str, points: float,
                      *, grudge_discount: bool = True) -> float:
         """Apply a point delta, honouring the grudge discount (減圧1):
         while an individual holds a grudge, positive gains to affection and
-        joy are discounted (they cannot simply enjoy kindness right now)."""
+        joy are discounted (they cannot simply enjoy kindness right now).
+
+        The individual's per-dimension coefficient (section 9.2) is
+        multiplied into the points here -- and only here: half-lives,
+        thresholds and erosion never see it. While a log-v2 capture is
+        active, the points before and after the coefficient are recorded.
+        """
+        grudged = False
         if (
             grudge_discount
             and points > 0
@@ -182,9 +234,21 @@ class Simulation:
             and ind.grudging(self.step_count)
         ):
             points = points * float(self.config["grudge"]["positive_discount"])
-        if points == 0:
+            grudged = True
+        pre = points
+        post = points * ind.coefficients[dim]
+        if self._capture is not None and ind.id in self._capture:
+            record = self._capture[ind.id]
+            if pre != 0.0:
+                record["points_pre"][dim] = round(
+                    record["points_pre"].get(dim, 0.0) + pre, 4)
+                record["points_post"][dim] = round(
+                    record["points_post"].get(dim, 0.0) + post, 4)
+            if grudged:
+                record["grudge"] = True
+        if post == 0:
             return 0.0
-        return ind.emotions.apply(dim, points)
+        return ind.emotions.apply(dim, post)
 
     def apply_table(self, ind: Individual, table: dict, *, scale: float = 1.0,
                     grudge_discount: bool = True) -> dict:
@@ -504,21 +568,26 @@ class Simulation:
                     table = cfg["deltas"]["react_avoided_anger"]
                 else:
                     table = cfg["deltas"]["react_avoided_affection"]
+                self._begin_capture([ind_id])
                 effects = self.apply_table(ind, table)
                 self._log("REACT", ind_id, other.id, kind="avoided",
                           effects={ind_id: effects} if effects else None,
                           detail={"approach_emotion": emotion,
                                   "dist_before": dist_before,
-                                  "dist_after": dist_after})
+                                  "dist_after": dist_after},
+                          appraisal=self._take_capture())
             elif dist_after < dist_before:
                 other_reason, _ = info.get(other.id, ("act", None))
                 if other_reason == "interrupt_approach":
+                    self._begin_capture([ind_id])
                     effects = self.apply_table(ind, cfg["deltas"]["react_mutual"])
+                    capture = self._take_capture()
                     if effects:
                         self._log("REACT", ind_id, other.id, kind="mutual_approach",
                                   effects={ind_id: effects},
                                   detail={"dist_before": dist_before,
-                                          "dist_after": dist_after})
+                                          "dist_after": dist_after},
+                                  appraisal=capture)
 
     def _notice(self, dist: int) -> None:
         cfg = self.config
@@ -529,6 +598,7 @@ class Simulation:
             visible_now = dist <= radius and not ind.asleep
             was_visible = self.visible_prev[ind.id]
             if visible_now and not was_visible:
+                self._begin_capture([ind.id])
                 effects: dict[str, float] = {}
                 dim, value, _excess = ind.emotions.dominant_toward_other()
                 if dim is not None:
@@ -554,10 +624,13 @@ class Simulation:
                     if delta:
                         effects["anger"] = effects.get("anger", 0.0) + delta
                     detail["grudge_reignite"] = True
+                    self._mark_grudge(ind)
                 self._log("NOTICE", ind.id, other.id, kind=kind,
                           effects={ind.id: effects} if effects else None,
-                          detail=detail)
+                          detail=detail,
+                          appraisal=self._take_capture())
             elif was_visible and not visible_now and not ind.asleep:
+                self._begin_capture([ind.id])
                 dim, _value, _excess = ind.emotions.dominant_toward_other()
                 effects = {}
                 if dim in ("affection", "fear"):
@@ -568,17 +641,54 @@ class Simulation:
                             effects[d] = delta
                 self._log("LOST_SIGHT", ind.id, other.id,
                           effects={ind.id: effects} if effects else None,
-                          detail={"dominant": dim})
+                          detail={"dominant": dim},
+                          appraisal=self._take_capture())
             self.visible_prev[ind.id] = visible_now
 
     def _contact(self, a: Individual, b: Individual) -> None:
         cfg = self.config
         deltas = cfg["deltas"]
+        # Every contact outcome involves both individuals (spec section 9.1).
+        self._begin_capture([a.id, b.id])
 
         # accident first: the seed of anger, independent of goodwill.
-        # Each side takes the accident a little differently (anger jitter),
-        # which is what later lets one side cool down before the other.
         if self.rng.random() < float(cfg["contact"]["friction_probability"]):
+            if cfg["contact"].get("friction_mode", "per_person") == "strength":
+                # New mode (spec section 9.3-1): the friction's strength is
+                # chosen once, on a 3-stage scale, and the same value lands
+                # on both individuals; how each side takes it is left to
+                # their coefficients. The stage is recorded in the log.
+                weights = cfg["contact"].get(
+                    "friction_strength_weights", [1, 1, 1])
+                stage_points = cfg["contact"].get(
+                    "friction_strength_anger_points", [2, 5, 8])
+                pick = self.rng.random() * float(sum(weights))
+                stage = 0
+                cumulative = 0.0
+                for i, weight in enumerate(weights):
+                    cumulative += float(weight)
+                    if pick < cumulative:
+                        stage = i
+                        break
+                else:
+                    stage = len(weights) - 1
+                effects = {}
+                for ind in (a, b):
+                    table = dict(deltas["friction"])
+                    table["anger"] = stage_points[stage]
+                    eff = self.apply_table(ind, table, grudge_discount=False)
+                    if eff:
+                        effects[ind.id] = eff
+                self._log("FRICTION", a.id, b.id, effects=effects or None,
+                          detail={"consecutive_contacts":
+                                  self.pair_consecutive_contacts,
+                                  "strength_stage": stage + 1,
+                                  "strength_anger_points": stage_points[stage]},
+                          appraisal=self._take_capture())
+                return
+            # Default mode (unchanged): each side takes the accident a
+            # little differently (anger jitter), which is what later lets
+            # one side cool down before the other.
             effects = {}
             jitter_span = int(cfg["contact"].get("friction_jitter", 1))
             for ind in (a, b):
@@ -589,7 +699,8 @@ class Simulation:
                 if eff:
                     effects[ind.id] = eff
             self._log("FRICTION", a.id, b.id, effects=effects or None,
-                      detail={"consecutive_contacts": self.pair_consecutive_contacts})
+                      detail={"consecutive_contacts": self.pair_consecutive_contacts},
+                      appraisal=self._take_capture())
             return
 
         dom_a, _ = a.emotions.dominant()
@@ -607,7 +718,8 @@ class Simulation:
                 eff = self.apply_table(ind, deltas["fight"], grudge_discount=False)
                 if eff:
                     effects[ind.id] = eff
-            self._log("FIGHT", a.id, b.id, effects=effects or None)
+            self._log("FIGHT", a.id, b.id, effects=effects or None,
+                      appraisal=self._take_capture())
             for ind in (a, b):
                 if not ind.avoid:
                     ind.avoid = True
@@ -635,7 +747,8 @@ class Simulation:
                     self._log("APOLOGY", calm_side.id, angry.id,
                               effects=effects or None,
                               detail={"result": "rejected",
-                                      "anger": round(angry.emotions.get("anger"), 4)})
+                                      "anger": round(angry.emotions.get("anger"), 4)},
+                              appraisal=self._take_capture())
                 else:
                     eff_target = self.apply_table(
                         angry, deltas["apology_accepted_target"], grudge_discount=False)
@@ -649,7 +762,8 @@ class Simulation:
                     self._log("APOLOGY", calm_side.id, angry.id,
                               effects=effects or None,
                               detail={"result": "accepted",
-                                      "anger": round(angry.emotions.get("anger"), 4)})
+                                      "anger": round(angry.emotions.get("anger"), 4)},
+                              appraisal=self._take_capture())
                 return
 
         if dom_a == "fear" or dom_b == "fear":
@@ -662,7 +776,8 @@ class Simulation:
                 if eff:
                     effects[ind.id] = eff
             self._log("CONTACT", a.id, b.id, kind="keep_distance",
-                      effects=effects or None)
+                      effects=effects or None,
+                      appraisal=self._take_capture())
             return
 
         if dom_a == "affection" and dom_b == "affection":
@@ -677,7 +792,8 @@ class Simulation:
             self._log("CONTACT", a.id, b.id, kind="together",
                       effects=effects or None,
                       detail={"consecutive_contacts": self.pair_consecutive_contacts,
-                              "habituation_factor": round(factor, 4)})
+                              "habituation_factor": round(factor, 4)},
+                      appraisal=self._take_capture())
             return
 
         # greeting: at least one side warm, or both calm (the bootstrap)
@@ -695,7 +811,8 @@ class Simulation:
                 eff = {}
             if eff:
                 effects[ind.id] = eff
-        self._log("CONTACT", a.id, b.id, kind="greet", effects=effects or None)
+        self._log("CONTACT", a.id, b.id, kind="greet", effects=effects or None,
+                  appraisal=self._take_capture())
 
     # ------------------------------------------------------------------
     # persistence
@@ -736,4 +853,5 @@ class Simulation:
         sim.pair_consecutive_contacts = int(state["pair_consecutive_contacts"])
         sim.visible_prev = {k: bool(v) for k, v in state["visible_prev"].items()}
         sim.diary_provider = get_provider(config["diary"]["provider"])
+        sim._capture = None
         return sim

@@ -174,5 +174,88 @@ class TestLongRun(unittest.TestCase):
         self.assertGreaterEqual(counts["DIARY"], 50)
 
 
+class TestLogV2(unittest.TestCase):
+    """Log v2 (appraisal sample spec v0.6, sections 9.1-9.3)."""
+
+    def test_seed42_regression_without_appraisal_key(self):
+        # Section 9.2 regression: default config (all coefficients 1.0,
+        # per-person friction), seed 42, 100 days; stripping the added
+        # `appraisal` key must reproduce examples/ byte for byte.
+        config = load_config()
+        sim = Simulation(config, seed=42)
+        sim.run_days(100)
+        example_path = (Path(__file__).resolve().parent.parent
+                        / "examples" / "run-seed42-100d" / "log.jsonl")
+        example_lines = example_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(example_lines), len(sim.events))
+        for event, line in zip(sim.events, example_lines):
+            stripped = {k: v for k, v in event.items() if k != "appraisal"}
+            self.assertEqual(json.dumps(stripped, ensure_ascii=False), line)
+
+    def test_appraisal_involved_individuals(self):
+        config = load_config()
+        sim = Simulation(config, seed=42)
+        sim.run_days(30)
+        seen = Counter()
+        for event in sim.events:
+            if "appraisal" not in event:
+                continue
+            record = event["appraisal"]
+            if event["type"] in ("CONTACT", "FRICTION", "FIGHT", "APOLOGY"):
+                self.assertEqual(set(record), {"A", "B"}, event)
+            if event["type"] in ("NOTICE", "LOST_SIGHT", "REACT"):
+                self.assertEqual(set(record), {event["actor"]}, event)
+            for rec in record.values():
+                self.assertEqual(set(rec["state_before"]),
+                                 {"joy", "sadness", "anger", "fear", "surprise",
+                                  "affection", "trust", "fatigue"})
+                self.assertIn("points_pre", rec)
+                self.assertIn("points_post", rec)
+                self.assertIn("grudge", rec)
+            seen[event["type"]] += 1
+        for expected in ("CONTACT", "FRICTION", "FIGHT", "NOTICE"):
+            self.assertGreaterEqual(seen[expected], 1)
+
+    def test_coefficient_scales_points_only(self):
+        config = load_config()
+        config["individuals"]["A"]["coefficients"]["anger"] = 1.5
+        sim = Simulation(config, seed=3)
+        a = sim.individuals["A"]
+        sim._begin_capture(["A"])
+        delta = sim.apply_points(a, "anger", 4.0)
+        record = sim._take_capture()["A"]
+        self.assertEqual(record["points_pre"]["anger"], 4.0)
+        self.assertEqual(record["points_post"]["anger"], 6.0)
+        self.assertAlmostEqual(delta, 6.0 * a.emotions.point_scale, places=9)
+
+    def test_grudge_flag_and_discount_recorded(self):
+        config = load_config()
+        sim = Simulation(config, seed=3)
+        a = sim.individuals["A"]
+        a.grudge_until = sim.step_count + 10
+        sim._begin_capture(["A"])
+        sim.apply_points(a, "affection", 5.0)
+        record = sim._take_capture()["A"]
+        self.assertTrue(record["grudge"])
+        self.assertAlmostEqual(record["points_pre"]["affection"], 2.0)
+
+    def test_friction_strength_mode(self):
+        config = load_config()
+        config["contact"]["friction_mode"] = "strength"
+        sim = Simulation(config, seed=42)
+        sim.run_days(30)
+        frictions = [e for e in sim.events if e["type"] == "FRICTION"]
+        self.assertGreaterEqual(len(frictions), 1)
+        for event in frictions:
+            stage = event["detail"]["strength_stage"]
+            self.assertIn(stage, (1, 2, 3))
+            points = event["detail"]["strength_anger_points"]
+            self.assertEqual(points, [2, 5, 8][stage - 1])
+            for ind_id in ("A", "B"):
+                rec = event["appraisal"][ind_id]
+                self.assertEqual(rec["points_pre"]["anger"], float(points))
+                self.assertEqual(rec["points_pre"]["trust"], -2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
