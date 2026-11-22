@@ -1,0 +1,5 @@
+# Development-only dependencies (the simulation and the sample builder
+# themselves use only the standard library).
+# jsonschema is used by the sample validation test / inspection commands:
+#   pip install -r requirements-dev.txt
+jsonschema>=4.0

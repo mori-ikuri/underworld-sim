@@ -1,0 +1,395 @@
+{
+  "$defs": {
+    "char_profile": {
+      "additionalProperties": false,
+      "properties": {
+        "affection": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "anger": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "fatigue": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "fear": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "joy": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "sadness": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "surprise": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        },
+        "trust": {
+          "enum": [
+            0.5,
+            1.0,
+            1.5
+          ]
+        }
+      },
+      "required": [
+        "joy",
+        "sadness",
+        "anger",
+        "fear",
+        "surprise",
+        "affection",
+        "trust",
+        "fatigue"
+      ],
+      "type": "object"
+    },
+    "deltas_nonempty": {
+      "additionalProperties": {
+        "enum": [
+          -4,
+          -3,
+          -2,
+          -1,
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "enum": [
+          "joy",
+          "sadness",
+          "anger",
+          "fear",
+          "surprise",
+          "affection",
+          "trust",
+          "fatigue"
+        ]
+      },
+      "type": "object"
+    },
+    "state": {
+      "additionalProperties": false,
+      "properties": {
+        "affection": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "anger": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "fatigue": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "fear": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "joy": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "sadness": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "surprise": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        },
+        "trust": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "joy",
+        "sadness",
+        "anger",
+        "fear",
+        "surprise",
+        "affection",
+        "trust",
+        "fatigue"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "annotator_id": {
+      "type": "string"
+    },
+    "input": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "char_profile": {
+          "$ref": "#/$defs/char_profile"
+        },
+        "contact_streak": {
+          "maximum": 6,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "event_text": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "perspective": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "recent_context": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "type": "array"
+        },
+        "relationship": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "state_before": {
+          "$ref": "#/$defs/state"
+        },
+        "target": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "target_category": {
+          "enum": [
+            "相棒へ",
+            "ほかの人へ",
+            "利用者自身へ"
+          ]
+        }
+      },
+      "required": [
+        "event_text",
+        "perspective",
+        "actor",
+        "target",
+        "target_category",
+        "relationship",
+        "char_profile"
+      ],
+      "type": "object"
+    },
+    "label_source": {
+      "enum": [
+        "table",
+        "human",
+        "open_model"
+      ]
+    },
+    "label_version": {
+      "pattern": "^rule-[0-9]+$",
+      "type": "string"
+    },
+    "output": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "deltas": {
+              "$ref": "#/$defs/deltas_nonempty"
+            },
+            "verdict": {
+              "const": "change"
+            }
+          },
+          "required": [
+            "verdict",
+            "deltas"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "deltas": {
+              "maxProperties": 0,
+              "type": "object"
+            },
+            "verdict": {
+              "const": "no_change"
+            }
+          },
+          "required": [
+            "verdict",
+            "deltas"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "not": {
+            "required": [
+              "deltas"
+            ]
+          },
+          "properties": {
+            "verdict": {
+              "const": "abstain"
+            }
+          },
+          "required": [
+            "verdict"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "axis_values": {
+          "type": "object"
+        },
+        "char_thresholds": {
+          "type": "object"
+        },
+        "config_hash": {
+          "type": "string"
+        },
+        "decoder_version": {
+          "type": "string"
+        },
+        "generator": {
+          "type": "string"
+        },
+        "generator_commit": {
+          "type": "string"
+        },
+        "raw_ref": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "source_event": {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "step": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "step"
+          ],
+          "type": "object"
+        },
+        "template_id": {
+          "type": "string"
+        },
+        "with_context_fields": {
+          "type": "boolean"
+        },
+        "writing_origin": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "generator",
+        "generator_commit",
+        "decoder_version",
+        "seed",
+        "run_id",
+        "config_hash",
+        "template_id",
+        "axis_values",
+        "char_thresholds",
+        "source_event"
+      ],
+      "type": "object"
+    },
+    "sample_id": {
+      "pattern": "^uw-[0-9]{6}$",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "sim",
+        "real",
+        "human_written"
+      ]
+    },
+    "spec_version": {
+      "const": "0.6"
+    }
+  },
+  "required": [
+    "sample_id",
+    "spec_version",
+    "input",
+    "output",
+    "label_source",
+    "label_version",
+    "source",
+    "provenance"
+  ],
+  "title": "Appraisal sample (spec v0.6, section 1)",
+  "type": "object"
+}

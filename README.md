@@ -63,6 +63,27 @@ python -m unittest discover -s tests -v
 パラメータ（閾値・確率・半減期・ベースライン・各種増減表）はすべて `config/default.json` に外出ししてある。
 `--config` で別JSONを指定すると、既定値に深くマージして上書きできる。
 
+## 感情判定サンプルの生成
+
+ログ v2（`appraisal` キーつき）から、感情判定モデルの学習・検証用サンプルを作る。
+形式・正解の作り方・分割ルールは凍結済みの仕様
+[docs/appraisal-sample-spec-v0.6.md](docs/appraisal-sample-spec-v0.6.md)（v0.6、2026-11-21 凍結）が正で、
+サンプルの JSON Schema は [docs/sample-schema.json](docs/sample-schema.json) に置く。
+
+```bash
+# run ディレクトリ（log.jsonl と run.json を含む）を渡す。run 単位で
+# 学習／検証／テストに割り当ててから、train.jsonl / val.jsonl / test.jsonl を出す
+python -m underworld samples --runs runs/run1 runs/run2 --out samples
+
+# 試しデータ一式（気質ランダム10本＋係数1.0の seed42、すべて摩擦は strength 方式）と集計
+python tools/trial_runs.py
+```
+
+- `run.json` には `run_id`・`seed`・個体ごとの `coefficients`（気質）と `thresholds`・`config_hash`・`generator_commit` を書く。
+- 分割は run（＝気質の組み合わせ）単位で先に決める。テスト側の気質の組み合わせは学習・検証に出ない。
+- Schema 検査を含むテストには開発用依存（jsonschema）が要る：`pip install -r requirements-dev.txt`。シミュレーション本体とサンプル生成は標準ライブラリのみ。
+- なお `examples/` のログは v1 のままで、`appraisal` キーは付いていない（回帰テストの正本として固定してある）。サンプル生成にはログ v2 の run が要る。
+
 ## 観測できるもの
 
 サマリには、ログから自動で切り出した「エピソード（出来事の連鎖）」が載る。

@@ -216,6 +216,35 @@ class TestLogV2(unittest.TestCase):
         for expected in ("CONTACT", "FRICTION", "FIGHT", "NOTICE"):
             self.assertGreaterEqual(seen[expected], 1)
 
+    def test_tables_recorded_in_appraisal(self):
+        # Fix 2: each appraisal record names the delta tables applied
+        # to that individual (first-application order, no duplicates);
+        # direct point additions (NOTICE) leave the list empty.
+        config = load_config()
+        sim = Simulation(config, seed=42)
+        sim.run_days(30)
+        greet_tables = set()
+        for event in sim.events:
+            if "appraisal" not in event:
+                continue
+            for rec in event["appraisal"].values():
+                self.assertIn("tables", rec)
+                self.assertIsInstance(rec["tables"], list)
+                self.assertEqual(len(rec["tables"]),
+                                 len(set(rec["tables"])))
+            if event["type"] == "CONTACT" and event.get("kind") == "greet":
+                for rec in event["appraisal"].values():
+                    greet_tables.update(rec["tables"])
+            if event["type"] == "CONTACT" \
+                    and event.get("kind") == "keep_distance":
+                all_tables = [t for rec in event["appraisal"].values()
+                              for t in rec["tables"]]
+                self.assertIn("keep_distance_self", all_tables)
+        self.assertTrue(greet_tables & {"greet_warm", "greet_met",
+                                        "greet_calm"}, greet_tables)
+        self.assertTrue(greet_tables <= {"greet_warm", "greet_met",
+                                         "greet_calm"}, greet_tables)
+
     def test_coefficient_scales_points_only(self):
         config = load_config()
         config["individuals"]["A"]["coefficients"]["anger"] = 1.5

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from .analyze import load_log, render_diaries, render_markdown, summarize
 from .config import load_config
+from .samples import assign_splits, build_samples
 from .simulation import Simulation
 
 
@@ -70,6 +71,43 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_samples(args: argparse.Namespace) -> int:
+    run_metas = []
+    run_events: dict[str, list[dict]] = {}
+    for run_dir in args.runs:
+        run_path = Path(run_dir)
+        with open(run_path / "run.json", encoding="utf-8") as fh:
+            meta = json.load(fh)
+        run_metas.append(meta)
+        run_events[meta["run_id"]] = load_log(run_path / "log.jsonl")
+    assignment = assign_splits(run_metas, train_ratio=args.train_ratio,
+                               val_ratio=args.val_ratio,
+                               split_seed=args.split_seed)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    by_side: dict[str, list[dict]] = {"train": [], "val": [], "test": []}
+    index = 1
+    totals: dict[str, int] = {}
+    for meta in run_metas:
+        side = assignment[meta["run_id"]]
+        samples, stats, index = build_samples(
+            run_events[meta["run_id"]], meta, side, start_index=index)
+        by_side[side].extend(samples)
+        for key, count in stats["per_type"].items():
+            totals[key] = totals.get(key, 0) + count
+        print(f"run {meta['run_id']}: side={side}, "
+              f"samples={len(samples)}, "
+              f"grudge_excluded={stats['grudge_excluded']}")
+    for side, samples in by_side.items():
+        with open(out / f"{side}.jsonl", "w", encoding="utf-8") as fh:
+            for sample in samples:
+                fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+        print(f"{side}: {len(samples)} samples")
+    print(f"per type: {dict(sorted(totals.items()))}")
+    print(f"output: {out}")
+    return 0
+
+
 def _cmd_analyze(args: argparse.Namespace) -> int:
     events = load_log(args.log)
     summary = summarize(events)
@@ -94,6 +132,17 @@ def main(argv: list[str] | None = None) -> int:
     analyze = sub.add_parser("analyze", help="summarize an existing log.jsonl")
     analyze.add_argument("--log", required=True)
     analyze.set_defaults(func=_cmd_analyze)
+
+    samples = sub.add_parser(
+        "samples", help="build appraisal samples from log v2 runs")
+    samples.add_argument("--runs", nargs="+", required=True,
+                         help="run directories (log.jsonl + run.json)")
+    samples.add_argument("--out", default="samples",
+                         help="output directory for train/val/test JSONL")
+    samples.add_argument("--train-ratio", type=float, default=0.8)
+    samples.add_argument("--val-ratio", type=float, default=0.1)
+    samples.add_argument("--split-seed", type=int, default=0)
+    samples.set_defaults(func=_cmd_samples)
 
     args = parser.parse_args(argv)
     return args.func(args)

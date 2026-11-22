@@ -203,6 +203,7 @@ class Simulation:
                 "points_pre": {},
                 "points_post": {},
                 "grudge": False,
+                "tables": [],
             }
             for ind_id in ind_ids
         }
@@ -251,7 +252,20 @@ class Simulation:
         return ind.emotions.apply(dim, post)
 
     def apply_table(self, ind: Individual, table: dict, *, scale: float = 1.0,
-                    grudge_discount: bool = True) -> dict:
+                    grudge_discount: bool = True,
+                    table_name: str | None = None) -> dict:
+        # Log v2: record which named delta table was applied to this
+        # individual, in first-application order, without duplicates.
+        # Decoders read visible behaviour (greeting demeanour, who took
+        # distance) from this name -- never from the points' shape, which
+        # the grudge discount can distort. Points applied directly via
+        # apply_points (e.g. NOTICE) are not a table, so "tables" stays
+        # empty for those individuals.
+        if table_name is not None and self._capture is not None \
+                and ind.id in self._capture:
+            tables = self._capture[ind.id].setdefault("tables", [])
+            if table_name not in tables:
+                tables.append(table_name)
         effects = {}
         for dim, points in table.items():
             delta = self.apply_points(ind, dim, points * scale,
@@ -378,7 +392,8 @@ class Simulation:
                 if not self.is_night() and ind.sleepiness <= 0.15:
                     ind.asleep = False
                     effects = self.apply_table(ind, cfg["deltas"]["wake"],
-                                               grudge_discount=False)
+                                               grudge_discount=False,
+                                               table_name="wake")
                     self._log("WAKE", ind.id, None,
                               effects={ind.id: effects} if effects else None)
 
@@ -397,7 +412,8 @@ class Simulation:
                     and ind.hunger >= float(body["eat_min_hunger"]):
                 ind.hunger = float(body["hunger_after_eat"])
                 ind.stamina = min(1.0, ind.stamina + float(body["eat_stamina_gain"]))
-                effects = self.apply_table(ind, cfg["deltas"]["eat"])
+                effects = self.apply_table(ind, cfg["deltas"]["eat"],
+                                       table_name="eat")
                 self._log("EAT", ind.id, None,
                           effects={ind.id: effects} if effects else None,
                           detail={"spot": list(ind.pos)})
@@ -407,7 +423,8 @@ class Simulation:
             if on_rest_spot and (ind.resting or ind.stamina <= float(body["stamina_rest_start"])):
                 ind.resting = True
                 ind.stamina = min(1.0, ind.stamina + float(body["rest_rate"]))
-                effects = self.apply_table(ind, cfg["deltas"]["rest"])
+                effects = self.apply_table(ind, cfg["deltas"]["rest"],
+                                       table_name="rest")
                 self._log("REST", ind.id, None,
                           effects={ind.id: effects} if effects else None,
                           detail={"spot": list(ind.pos)})
@@ -566,10 +583,12 @@ class Simulation:
                 # approached, but the other got away: the reaction lands here
                 if emotion == "anger":
                     table = cfg["deltas"]["react_avoided_anger"]
+                    table_name = "react_avoided_anger"
                 else:
                     table = cfg["deltas"]["react_avoided_affection"]
+                    table_name = "react_avoided_affection"
                 self._begin_capture([ind_id])
-                effects = self.apply_table(ind, table)
+                effects = self.apply_table(ind, table, table_name=table_name)
                 self._log("REACT", ind_id, other.id, kind="avoided",
                           effects={ind_id: effects} if effects else None,
                           detail={"approach_emotion": emotion,
@@ -580,7 +599,8 @@ class Simulation:
                 other_reason, _ = info.get(other.id, ("act", None))
                 if other_reason == "interrupt_approach":
                     self._begin_capture([ind_id])
-                    effects = self.apply_table(ind, cfg["deltas"]["react_mutual"])
+                    effects = self.apply_table(ind, cfg["deltas"]["react_mutual"],
+                                               table_name="react_mutual")
                     capture = self._take_capture()
                     if effects:
                         self._log("REACT", ind_id, other.id, kind="mutual_approach",
@@ -676,7 +696,8 @@ class Simulation:
                 for ind in (a, b):
                     table = dict(deltas["friction"])
                     table["anger"] = stage_points[stage]
-                    eff = self.apply_table(ind, table, grudge_discount=False)
+                    eff = self.apply_table(ind, table, grudge_discount=False,
+                                           table_name="friction")
                     if eff:
                         effects[ind.id] = eff
                 self._log("FRICTION", a.id, b.id, effects=effects or None,
@@ -695,7 +716,8 @@ class Simulation:
                 table = dict(deltas["friction"])
                 jitter = self.rng.randint(-jitter_span, jitter_span)
                 table["anger"] = max(1, table["anger"] + jitter)
-                eff = self.apply_table(ind, table, grudge_discount=False)
+                eff = self.apply_table(ind, table, grudge_discount=False,
+                                       table_name="friction")
                 if eff:
                     effects[ind.id] = eff
             self._log("FRICTION", a.id, b.id, effects=effects or None,
@@ -715,7 +737,8 @@ class Simulation:
         if a_angry and b_angry:
             effects = {}
             for ind in (a, b):
-                eff = self.apply_table(ind, deltas["fight"], grudge_discount=False)
+                eff = self.apply_table(ind, deltas["fight"], grudge_discount=False,
+                                       table_name="fight")
                 if eff:
                     effects[ind.id] = eff
             self._log("FIGHT", a.id, b.id, effects=effects or None,
@@ -736,9 +759,11 @@ class Simulation:
                     or calm_side.emotions.get("trust") >= warm + 0.05:
                 if angry.emotions.get("anger") > float(cfg["apology"]["fail_anger"]):
                     eff_actor = self.apply_table(
-                        calm_side, deltas["apology_rejected_actor"], grudge_discount=False)
+                        calm_side, deltas["apology_rejected_actor"], grudge_discount=False,
+                        table_name="apology_rejected_actor")
                     eff_target = self.apply_table(
-                        angry, deltas["apology_rejected_target"], grudge_discount=False)
+                        angry, deltas["apology_rejected_target"], grudge_discount=False,
+                        table_name="apology_rejected_target")
                     effects = {}
                     if eff_actor:
                         effects[calm_side.id] = eff_actor
@@ -751,9 +776,11 @@ class Simulation:
                               appraisal=self._take_capture())
                 else:
                     eff_target = self.apply_table(
-                        angry, deltas["apology_accepted_target"], grudge_discount=False)
+                        angry, deltas["apology_accepted_target"], grudge_discount=False,
+                        table_name="apology_accepted_target")
                     eff_actor = self.apply_table(
-                        calm_side, deltas["apology_accepted_actor"])
+                        calm_side, deltas["apology_accepted_actor"],
+                        table_name="apology_accepted_actor")
                     effects = {}
                     if eff_actor:
                         effects[calm_side.id] = eff_actor
@@ -770,9 +797,11 @@ class Simulation:
             effects = {}
             for ind, dom in ((a, dom_a), (b, dom_b)):
                 if dom == "fear":
-                    eff = self.apply_table(ind, deltas["keep_distance_self"])
+                    eff = self.apply_table(ind, deltas["keep_distance_self"],
+                                           table_name="keep_distance_self")
                 else:
-                    eff = self.apply_table(ind, deltas["keep_distance_other"])
+                    eff = self.apply_table(ind, deltas["keep_distance_other"],
+                                           table_name="keep_distance_other")
                 if eff:
                     effects[ind.id] = eff
             self._log("CONTACT", a.id, b.id, kind="keep_distance",
@@ -786,7 +815,8 @@ class Simulation:
                          float(hab["factor"]) ** max(0, self.pair_consecutive_contacts - 1))
             effects = {}
             for ind in (a, b):
-                eff = self.apply_table(ind, deltas["together"], scale=factor)
+                eff = self.apply_table(ind, deltas["together"], scale=factor,
+                                       table_name="together")
                 if eff:
                     effects[ind.id] = eff
             self._log("CONTACT", a.id, b.id, kind="together",
@@ -800,13 +830,16 @@ class Simulation:
         effects = {}
         for ind, dom in ((a, dom_a), (b, dom_b)):
             if dom in ("affection", "trust"):
-                eff = self.apply_table(ind, deltas["greet_warm"])
+                eff = self.apply_table(ind, deltas["greet_warm"],
+                                       table_name="greet_warm")
             elif dom is None:
                 partner_dom = dom_b if ind is a else dom_a
                 if partner_dom in ("affection", "trust"):
-                    eff = self.apply_table(ind, deltas["greet_met"])
+                    eff = self.apply_table(ind, deltas["greet_met"],
+                                           table_name="greet_met")
                 else:
-                    eff = self.apply_table(ind, deltas["greet_calm"])
+                    eff = self.apply_table(ind, deltas["greet_calm"],
+                                           table_name="greet_calm")
             else:
                 eff = {}
             if eff:

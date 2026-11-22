@@ -4,7 +4,7 @@
 内側のループにLLMは入らず、解読（文章化）はこのログを読む側の仕事である。
 コストは「回した量」ではなく「読んだ量」に比例する、という設計の要。
 
-**v2（2026-11-21）**：感情判定サンプル仕様 v0.6（`docs/appraisal-sample-spec-v0.6.md`）の §9.1〜§9.3 に対応し、一部のイベントに `appraisal` キー（後述）を追加した。`appraisal` キーを外せば v1 と同じ1行に戻る。あわせて、個体ごとの感情係数（§9.2）と、摩擦の強さ方式（§9.3-1）を設定で選べるようにした。
+**v2（2026-11-22）**：感情判定サンプル仕様 v0.6（`docs/appraisal-sample-spec-v0.6.md`）の §9.1〜§9.3 に対応し、一部のイベントに `appraisal` キー（後述）を追加した。`appraisal` キーを外せば v1 と同じ1行に戻る。あわせて、個体ごとの感情係数（§9.2）と、摩擦の強さ方式（§9.3-1）を設定で選べるようにした。
 
 ## 共通フィールド
 
@@ -31,7 +31,8 @@
     "state_before": {"joy": 0.29, "sadness": 0.05, ...},   // その出来事の直前の8次元
     "points_pre":  {"anger": 8.0, "trust": -2.0},          // 慣れの割引のあと・係数の前の点数
     "points_post": {"anger": 8.0, "trust": -2.0},          // 係数を掛けたあとの点数（状態に足されるのはこちら）
-    "grudge": false                                        // 恨みで点数が変わったか
+    "grudge": false,                                       // 恨みで点数が変わったか
+    "tables": ["greet_warm"]                               // その個体に当てた deltas の表の名前（下記）
   },
   "B": { ... }
 }
@@ -39,6 +40,7 @@
 
 - **関わった個体**：片方だけが感じる出来事（NOTICE・LOST_SIGHT・REACT）は感じた側だけ。CONTACT・FRICTION・FIGHT・APOLOGY は二人とも。点数が全部0でも記録する（`no_change` と「関わっていない」を分けるため）。記録のない次元は点数0として扱う。
 - **points_pre / points_post**：点数は「表の点数 → 慣れの割引 → 恨みの割引（×0.4）→ 係数」の順で加工され、`points_pre` は係数の直前、`points_post` は係数の直後の値。状態への反映は `points_post × point_scale` を 0..1 に切って行われる。
+- **tables**：その出来事でその個体に当てた `config.deltas` の表の名前のリスト。当てた順に並び、重複はない。点数を直接足すだけの出来事（NOTICE の支配感情の増幅など、表を使わないもの）では空リストになる。文章化（デコード）の側は、挨拶の相手の様子（相手の `tables` に `greet_warm` があれば「にこやか」）と、距離を取ったのが誰か（`keep_distance_self` を当てた側）を、この名前から決める。点数の形からは決めない――恨みの割引で点数が変わると形が崩れ、文と正解が食い違うため。
 - **grudge**：恨みの割引（好意・喜びのプラスの ×0.4）が効いたときと、気づいたときの再燃（NOTICE の `detail.grudge_reignite`）の両方で `true` になる。仕様 §9.3-2 により、この印のある件はサンプルから外す。
 - **係数（§9.2）**：`config` の `individuals.<ID>.coefficients` に次元ごとの係数を持てる（既定はすべて 1.0）。掛けるのは点数だけで、半減期・閾値・ERODE には掛けない。
 - **摩擦の強さ方式（§9.3-1）**：`contact.friction_mode` が `"strength"` のとき、摩擦ごとに強さを3段階（重み `contact.friction_strength_weights`、既定は均等）から一度だけ選び、二人に同じ怒りの点数（`contact.friction_strength_anger_points`、既定は 2・5・8）が当たる。選んだ段階は `detail.strength_stage`（1・2・3）と `detail.strength_anger_points` に残る。既定の `"per_person"` は従来どおり個体ごとに jitter でばらつく。
