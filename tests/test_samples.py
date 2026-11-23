@@ -1,4 +1,4 @@
-"""Tests for the appraisal sample builder (spec v0.6 sections 1-6, 9.4-9.5).
+"""Tests for the appraisal sample builder (spec v0.7 sections 1-6, 9.4-9.5, 11).
 
 Run with:  python -m unittest discover -s tests -v
 The schema test additionally needs the dev-only dependency:
@@ -93,14 +93,18 @@ def _all_combo_events():
             "B": _record({"fear": 1.0, "sadness": 1.0},
                          tables=["keep_distance_self"])}, step=12),
         _event("FRICTION", appraisal={
-            "A": _record({"anger": 2.0, "trust": -2.0}),
-            "B": _record({"anger": 2.0, "trust": -2.0})},
+            "A": _record({"sadness": 1.0}, tables=["friction_bumper"]),
+            "B": _record({"anger": 2.0, "trust": -2.0},
+                         tables=["friction"])},
             detail={"strength_stage": 1, "strength_anger_points": 2,
+                    "strength_sadness_points": 1, "bumper": "A",
                     "consecutive_contacts": 1}),
         _event("FRICTION", appraisal={
-            "A": _record({"anger": 8.0, "trust": -2.0}),
-            "B": _record({"anger": 8.0, "trust": -2.0})},
+            "A": _record({"anger": 8.0, "trust": -2.0},
+                         tables=["friction"]),
+            "B": _record({"sadness": 3.0}, tables=["friction_bumper"])},
             detail={"strength_stage": 3, "strength_anger_points": 8,
+                    "strength_sadness_points": 3, "bumper": "B",
                     "consecutive_contacts": 1}, step=13),
         _event("FIGHT", appraisal=dict(pair)),
         _event("APOLOGY", actor="B", target="A", appraisal=dict(pair),
@@ -138,6 +142,23 @@ class TestLabelProcedure(unittest.TestCase):
                 self.assertEqual(deltas["anger"], anger_expected,
                                  f"stage={stage} coef={coef}")
                 self.assertEqual(deltas["trust"], -2)
+
+    def test_bumper_sadness_examples(self):
+        # Spec 9.4 / 11.1: the bumper's sadness is the stage itself as
+        # pre-coefficient points, so it follows the same worked
+        # examples as the bumped side's anger (coef 0.5 / 1.0 / 1.5).
+        # No anger or trust dimension is created for the bumper.
+        expected = {1: {0.5: 1, 1.0: 1, 1.5: 2},
+                    2: {0.5: 1, 1.0: 2, 1.5: 3},
+                    3: {0.5: 2, 1.0: 3, 1.5: 4}}
+        for stage, by_coef in expected.items():
+            for coef, sadness_expected in by_coef.items():
+                coefs = dict(COEF_FLAT, sadness=coef)
+                verdict, deltas, _ = make_label(
+                    {"sadness": float(stage)}, coefs)
+                self.assertEqual(verdict, "change")
+                self.assertEqual(deltas, {"sadness": sadness_expected},
+                                 f"stage={stage} coef={coef}")
 
     def test_clamps_and_zero_drop(self):
         verdict, deltas, info = make_label({"anger": 9.0}, dict(COEF_FLAT))
@@ -180,6 +201,32 @@ class TestDecoder(unittest.TestCase):
         # And from B's side, A (greet_calm) is plain.
         text_b, _tid, _axis = decode(event, "B", "train", "r1")
         self.assertIn("ふつうの様子", text_b)
+
+    def test_friction_text_shared_by_both_perspectives(self):
+        # Spec 11.6: friction is written from an observer's viewpoint
+        # with both names and who bumped into whom; one event gets one
+        # sentence, whichever perspective the sample answers for --
+        # even on sides that carry two or more friction templates.
+        event = _event("FRICTION", appraisal={
+            "A": _record({"sadness": 2.0}, tables=["friction_bumper"]),
+            "B": _record({"anger": 5.0, "trust": -2.0},
+                         tables=["friction"])},
+            detail={"strength_stage": 2, "strength_anger_points": 5,
+                    "strength_sadness_points": 2, "bumper": "A",
+                    "consecutive_contacts": 1})
+        for side in ("train", "val", "test"):
+            side_templates = [t for t in TEMPLATES["friction"]
+                              if t["side"] == side]
+            self.assertGreaterEqual(len(side_templates), 2, side)
+            text_a, tid_a, axis_a = decode(event, "A", side, "r1")
+            text_b, tid_b, axis_b = decode(event, "B", side, "r1")
+            self.assertEqual(text_a, text_b)
+            self.assertEqual(tid_a, tid_b)
+            self.assertIn("A", text_a)
+            self.assertIn("B", text_a)
+            self.assertFalse(axis_a["subject_drop"])
+            for banned in ("しまう", "しまっ", "られ"):
+                self.assertNotIn(banned, text_a)
 
     def test_template_choice_ignores_perspective_state(self):
         event = _event("NOTICE", "spot", appraisal={"A": _record()})
@@ -230,6 +277,33 @@ class TestBuildSamples(unittest.TestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0]["input"]["perspective"], "B")
         self.assertEqual(stats["grudge_excluded"], 1)
+
+    def test_friction_bumper_and_bumped_labels(self):
+        # End to end (spec 11.1 / 9.4): A bumped into B at stage 2.
+        # A's label is sadness only (the recorded stage points, no
+        # anger, no trust); B's label is the stage as anger plus
+        # trust -2. Both samples share one event text (spec 11.6).
+        events = [_event("FRICTION", appraisal={
+            "A": _record({"sadness": 2.0}, tables=["friction_bumper"]),
+            "B": _record({"anger": 5.0, "trust": -2.0},
+                         tables=["friction"])},
+            detail={"strength_stage": 2, "strength_anger_points": 5,
+                    "strength_sadness_points": 2, "bumper": "A",
+                    "consecutive_contacts": 1})]
+        samples, _, _ = build_samples(events, _meta(), "train")
+        self.assertEqual(len(samples), 2)
+        by_perspective = {s["input"]["perspective"]: s for s in samples}
+        self.assertEqual(by_perspective["A"]["output"]["deltas"],
+                         {"sadness": 2})
+        self.assertEqual(by_perspective["B"]["output"]["deltas"],
+                         {"anger": 2, "trust": -2})
+        self.assertEqual(by_perspective["A"]["input"]["event_text"],
+                         by_perspective["B"]["input"]["event_text"])
+        for sample in samples:
+            self.assertEqual(sample["spec_version"], "0.7")
+            self.assertEqual(sample["label_version"], "rule-2")
+            self.assertEqual(
+                sample["provenance"]["decoder_version"], "0.2.0")
 
     def test_orientation(self):
         events = [_event("REACT", "avoided",
@@ -288,7 +362,8 @@ class TestSplit(unittest.TestCase):
 
     def test_combo_groups_never_split_5_5(self):
         metas = self._metas_for_group_sizes([5, 5])
-        assignment = assign_splits(metas)
+        with self.assertWarns(UserWarning):
+            assignment = assign_splits(metas)
         by_combo = {}
         for meta in metas:
             by_combo.setdefault(
@@ -296,6 +371,23 @@ class TestSplit(unittest.TestCase):
                     assignment[meta["run_id"]])
         for sig, sides in by_combo.items():
             self.assertEqual(len(sides), 1, sig)
+
+    def test_largest_group_assigned_first(self):
+        # Patch 3: groups are placed largest first, so the size-4
+        # group lands on the side with the largest deficit (train,
+        # target 4 after the minimum-side adjustment) instead of
+        # being pushed into a small side after the small groups.
+        metas = self._metas_for_group_sizes([4, 1, 1])
+        assignment = assign_splits(metas)
+        for k in range(4):
+            self.assertEqual(assignment[f"g0r{k}"], "train")
+        self.assertEqual({assignment["g1r0"], assignment["g2r0"]},
+                         {"val", "test"})
+
+    def test_warning_when_two_or_fewer_combos(self):
+        metas = self._metas_for_group_sizes([5, 5])
+        with self.assertWarns(UserWarning):
+            assign_splits(metas)
 
     def test_same_event_perspectives_share_side(self):
         # Sensei fix 3: the A-view and B-view samples built from the
@@ -359,6 +451,22 @@ class TestIncompatibleLogs(unittest.TestCase):
             detail={"consecutive_contacts": 1})
         with self.assertRaises(ValueError):
             decode(event, "A", "train", "r1")
+
+    def test_friction_without_bumper_raises(self):
+        # Spec 11.4: a strength-mode FRICTION without detail.bumper
+        # (a log written before method B) stops with a reason, both
+        # in the sample builder and in the decoder.
+        events = [_event("FRICTION", appraisal={
+            "A": _record({"anger": 5.0, "trust": -2.0}),
+            "B": _record({"anger": 5.0, "trust": -2.0})},
+            detail={"strength_stage": 2, "strength_anger_points": 5,
+                    "consecutive_contacts": 1})]
+        with self.assertRaises(ValueError) as ctx:
+            build_samples(events, _meta(), "train")
+        self.assertIn("bumper", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            decode(events[0], "A", "train", "r1")
+        self.assertIn("bumper", str(ctx.exception))
 
     def test_decoder_keep_distance_unknown_who_raises(self):
         event = _event("CONTACT", "keep_distance", appraisal={

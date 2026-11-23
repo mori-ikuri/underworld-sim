@@ -43,7 +43,7 @@
 - **tables**：その出来事でその個体に当てた `config.deltas` の表の名前のリスト。当てた順に並び、重複はない。点数を直接足すだけの出来事（NOTICE の支配感情の増幅など、表を使わないもの）では空リストになる。文章化（デコード）の側は、挨拶の相手の様子（相手の `tables` に `greet_warm` があれば「にこやか」）と、距離を取ったのが誰か（`keep_distance_self` を当てた側）を、この名前から決める。点数の形からは決めない――恨みの割引で点数が変わると形が崩れ、文と正解が食い違うため。
 - **grudge**：恨みの割引（好意・喜びのプラスの ×0.4）が効いたときと、気づいたときの再燃（NOTICE の `detail.grudge_reignite`）の両方で `true` になる。仕様 §9.3-2 により、この印のある件はサンプルから外す。
 - **係数（§9.2）**：`config` の `individuals.<ID>.coefficients` に次元ごとの係数を持てる（既定はすべて 1.0）。掛けるのは点数だけで、半減期・閾値・ERODE には掛けない。
-- **摩擦の強さ方式（§9.3-1）**：`contact.friction_mode` が `"strength"` のとき、摩擦ごとに強さを3段階（重み `contact.friction_strength_weights`、既定は均等）から一度だけ選び、二人に同じ怒りの点数（`contact.friction_strength_anger_points`、既定は 2・5・8）が当たる。選んだ段階は `detail.strength_stage`（1・2・3）と `detail.strength_anger_points` に残る。既定の `"per_person"` は従来どおり個体ごとに jitter でばらつく。
+- **摩擦の強さ方式（§9.3-1・§11.1・§11.2）**：`contact.friction_mode` が `"strength"` のとき、摩擦ごとに強さを3段階（重み `contact.friction_strength_weights`、既定は均等）から一度だけ選び、あわせて、どちらがぶつけたかを半々のくじで一度だけ選ぶ（直し方B）。ぶつけられた側には怒りの点数（`contact.friction_strength_anger_points`、既定は 2・5・8）と信頼 −2（`deltas.friction`）が当たり、ぶつけた側は怒りなし・信頼は動かず、悲しみ（`contact.friction_strength_sadness_points`、既定は段階そのまま 1・2・3）だけが当たる。選んだ段階は `detail.strength_stage`（1・2・3）と `detail.strength_anger_points`・`detail.strength_sadness_points` に、ぶつけた側は `detail.bumper`（`"A"` / `"B"`）に残る。`appraisal` の `tables` では、ぶつけられた側に `friction`、ぶつけた側に `friction_bumper` と記録される。文章化の側はぶつけた側を `detail.bumper` から決め、点数の形からは決めない。ログの版は v2 のままで、強さ方式の FRICTION の detail に `bumper` が1つ増えただけである。既定の `"per_person"` は従来どおり個体ごとに jitter でばらつき、くじも引かない（乱数の並びは変わらない）。
 
 感情次元は8つ：`joy`（喜び）`sadness`（悲しみ）`anger`（怒り）`fear`（不安）`surprise`（驚き）`affection`（好意）`trust`（信頼）`fatigue`（疲労）。
 いずれも 0..1 で、ベースラインと半減期は `config/default.json` の `emotions.dimensions` に従う。
@@ -58,7 +58,7 @@
 | `SURVIVAL` | `food` / `rest` | 本人 / 相手 | 空腹・体力が限界域（空腹 ≥ 0.9 / 体力 ≤ 0.1）に入り、生存系が感情の割り込みを上書きした。発動した瞬間に1回だけ記録 |
 | `REACT` | `avoided` / `mutual_approach` | 反応した側 / 相手 | 相手の反応を見たことによる感情変化。`avoided`：接近したのに相手が離れた（接近感情が怒りなら怒り増幅、好意なら不安・悲しみ）。`mutual_approach`：互いに接近し合い、不安が下がる |
 | `CONTACT` | `greet` / `together` / `keep_distance` | A / B（ペア） | 隣接時の接触の解決結果。`greet`：挨拶・会話（片方が温かい、または両者平常）。`together`：両者の好意が支配的で一緒に過ごす（連続接触で増分が割り引かれる＝慣れ。`detail.habituation_factor`）。`keep_distance`：不安が強い側が距離を取る |
-| `FRICTION` | — | A / B（ペア） | 事故（摩擦イベント）。接触ごとに約8%で発生し、両者に怒り+・信頼−を与える「怒りの種」。既定では怒りの量は個体ごとに僅かにばらつく（受け取り方の差）。`friction_mode: "strength"` のときは強さ3段階を一度だけ選び二人に同じ値が当たる（上記 appraisal の節を参照） |
+| `FRICTION` | — | A / B（ペア） | 事故（摩擦イベント）。接触ごとに約8%で発生する「怒りの種」。既定では怒りの量は個体ごとに僅かにばらつく（受け取り方の差）。`friction_mode: "strength"` のときは強さ3段階とぶつけた側（くじ）を一度だけ選び、ぶつけられた側に怒り+・信頼−、ぶつけた側に悲しみだけが当たる（上記 appraisal の節を参照） |
 | `APOLOGY` | — | 謝る側 / 謝られる側 | 片方だけが怒り、もう片方が温かい（好意・信頼が高い）ときに起きる謝罪の試行。`detail.result` が `accepted`（怒り−中・信頼+）/ `rejected`（相手の怒りが深すぎて届かず、謝った側の好意が少し下がる） |
 | `FIGHT` | — | A / B（ペア） | 両者が怒り支配的で接触し、喧嘩になった。両者 怒り+・好意−。直後に各自 `AVOID start` が続く |
 | `AVOID` | `start` / `end` | 回避する側 / 相手 | 回避モードの開始・終了。回避中は感情の割り込みが抑えられ、相手から離れることが目的地になる。ただし怒りが本人の割り込み閾値以上に達した場合は例外で、回避を破って相手へ向かう（`INTERRUPT` が優先）。怒りが下限以下に下がると終了 |

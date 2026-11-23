@@ -175,7 +175,7 @@ class TestLongRun(unittest.TestCase):
 
 
 class TestLogV2(unittest.TestCase):
-    """Log v2 (appraisal sample spec v0.6, sections 9.1-9.3)."""
+    """Log v2 (appraisal sample spec v0.7, sections 9.1-9.3, 11.1-11.2)."""
 
     def test_seed42_regression_without_appraisal_key(self):
         # Section 9.2 regression: default config (all coefficients 1.0,
@@ -269,6 +269,11 @@ class TestLogV2(unittest.TestCase):
         self.assertAlmostEqual(record["points_pre"]["affection"], 2.0)
 
     def test_friction_strength_mode(self):
+        # Spec 9.3-1 / 11.1 (method B; updated from the v0.6 form of
+        # this test, where the same anger landed on both sides): the
+        # bumped side takes anger (stage points 2/5/8) and trust -2;
+        # the side that bumped takes sadness = stage only -- no anger,
+        # no trust change. The bumper is recorded in the detail.
         config = load_config()
         config["contact"]["friction_mode"] = "strength"
         sim = Simulation(config, seed=42)
@@ -280,10 +285,65 @@ class TestLogV2(unittest.TestCase):
             self.assertIn(stage, (1, 2, 3))
             points = event["detail"]["strength_anger_points"]
             self.assertEqual(points, [2, 5, 8][stage - 1])
-            for ind_id in ("A", "B"):
-                rec = event["appraisal"][ind_id]
-                self.assertEqual(rec["points_pre"]["anger"], float(points))
-                self.assertEqual(rec["points_pre"]["trust"], -2.0)
+            self.assertEqual(event["detail"]["strength_sadness_points"],
+                             stage)
+            bumper = event["detail"]["bumper"]
+            self.assertIn(bumper, ("A", "B"))
+            bumped = "B" if bumper == "A" else "A"
+            rec_bumped = event["appraisal"][bumped]
+            self.assertEqual(rec_bumped["points_pre"]["anger"],
+                             float(points))
+            self.assertEqual(rec_bumped["points_pre"]["trust"], -2.0)
+            self.assertNotIn("sadness", rec_bumped["points_pre"])
+            rec_bumper = event["appraisal"][bumper]
+            self.assertEqual(rec_bumper["points_pre"],
+                             {"sadness": float(stage)})
+            self.assertIn("friction_bumper", rec_bumper["tables"])
+            self.assertIn("friction", rec_bumped["tables"])
+
+    def test_friction_bumper_coin_deterministic(self):
+        # Spec 11.2: the bumper coin is drawn from the seeded rng --
+        # the same seed reproduces the same (stage, bumper) sequence.
+        def run():
+            config = load_config()
+            config["contact"]["friction_mode"] = "strength"
+            sim = Simulation(config, seed=7)
+            sim.run_days(30)
+            return [(e["detail"]["strength_stage"],
+                     e["detail"]["bumper"])
+                    for e in sim.events if e["type"] == "FRICTION"]
+        first = run()
+        self.assertGreaterEqual(len(first), 1)
+        self.assertEqual(first, run())
+
+    def test_friction_bumper_roughly_half(self):
+        # Spec 11.2: over 100 days in strength mode, the coin lands
+        # on each side roughly half of the time.
+        config = load_config()
+        config["contact"]["friction_mode"] = "strength"
+        sim = Simulation(config, seed=42)
+        sim.run_days(100)
+        bumpers = [e["detail"]["bumper"] for e in sim.events
+                   if e["type"] == "FRICTION"]
+        self.assertGreaterEqual(len(bumpers), 20)
+        share_a = bumpers.count("A") / len(bumpers)
+        self.assertGreater(share_a, 0.3)
+        self.assertLess(share_a, 0.7)
+
+
+class TestDatagenConfig(unittest.TestCase):
+    """Data-generation config (spec 11.3)."""
+
+    def test_datagen_config_values(self):
+        root = Path(__file__).resolve().parent.parent
+        config = load_config(root / "config" / "datagen.json")
+        self.assertEqual(config["contact"]["friction_mode"], "strength")
+        self.assertEqual(config["apology"]["fail_anger"], 0.25)
+
+    def test_default_config_unchanged(self):
+        config = load_config()
+        self.assertEqual(config["contact"]["friction_mode"], "per_person")
+        self.assertEqual(config["apology"]["fail_anger"], 0.5)
 
 
 if __name__ == "__main__":

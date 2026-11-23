@@ -67,15 +67,24 @@ python -m unittest discover -s tests -v
 
 ログ v2（`appraisal` キーつき）から、感情判定モデルの学習・検証用サンプルを作る。
 形式・正解の作り方・分割ルールは凍結済みの仕様
-[docs/appraisal-sample-spec-v0.6.md](docs/appraisal-sample-spec-v0.6.md)（v0.6、2026-11-21 凍結）が正で、
+[docs/appraisal-sample-spec-v0.7.md](docs/appraisal-sample-spec-v0.7.md)（v0.7、2026-11-23 凍結）が正で、
 サンプルの JSON Schema は [docs/sample-schema.json](docs/sample-schema.json) に置く。
+（v0.6 の仕様ファイルも凍結版の記録として docs/ に残してある。）
+
+**データを作るときの設定は `config/datagen.json` を使う**（仕様 §11.3）。
+中身は摩擦の強さ方式（直し方B）と謝罪の `fail_anger` 0.25 で、`config/default.json` の
+既定（摩擦は per_person、`fail_anger` 0.5）とは別に、データ生成専用にまとめたもの。
+試しのデータも本番のデータもこのファイルを読み、設定がずれないようにする。
 
 ```bash
+# データ生成用の設定でシミュレーションを回す（--config は既定値に深くマージされる）
+python -m underworld run --days 100 --seed 42 --config config/datagen.json --out runs/run1
+
 # run ディレクトリ（log.jsonl と run.json を含む）を渡す。run 単位で
 # 学習／検証／テストに割り当ててから、train.jsonl / val.jsonl / test.jsonl を出す
 python -m underworld samples --runs runs/run1 runs/run2 --out samples
 
-# 試しデータ一式（気質ランダム10本＋係数1.0の seed42、すべて摩擦は strength 方式）と集計
+# 試しデータ一式（気質ランダム10本＋係数1.0の seed42、設定は config/datagen.json）と集計
 python tools/trial_runs.py
 ```
 

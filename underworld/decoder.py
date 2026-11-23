@@ -1,17 +1,20 @@
-"""Decoding symbolic log events into sample text (spec sections 2, 9.5).
+"""Decoding symbolic log events into sample text (spec sections 2, 9.5, 11.6).
 
 Template selection uses only the event type x kind, the split side of the
 run, and a stable hash of the event's identity -- never the perspective
 individual's state or points, so phrasing cannot leak the label. Visible
-facts (greeting demeanour, apology result, friction strength, who took
-distance, eye contact vs. spotting) are filled into slots. The greeting
-demeanour and the distance-taker are read from the *names* of the delta
-tables the simulation recorded in `appraisal.<id>.tables` -- never from
-the shape of the points, which the grudge discount can distort.
-Incompatible logs fail loudly instead of being silently decoded: a
-FRICTION without a strength stage, a greet / keep_distance record
-without `tables`, or a keep_distance where neither side's tables name
-keep_distance_self all raise ValueError.
+facts (greeting demeanour, apology result, friction strength, who bumped
+into whom, who took distance, eye contact vs. spotting) are filled into
+slots. The greeting demeanour and the distance-taker are read from the
+*names* of the delta tables the simulation recorded in
+`appraisal.<id>.tables` -- never from the shape of the points, which the
+grudge discount can distort. For FRICTION the bumper is read from the
+log detail, never from the points, and the template pick excludes the
+perspective, so both perspectives of one event get the same sentence
+(spec 11.6). Incompatible logs fail loudly instead of being silently
+decoded: a FRICTION without a strength stage or without a bumper, a
+greet / keep_distance record without `tables`, or a keep_distance where
+neither side's tables name keep_distance_self all raise ValueError.
 """
 
 from __future__ import annotations
@@ -23,11 +26,12 @@ from .templates import (
     CONTEXT_TEMPLATES,
     DEMEANOUR_PLAIN,
     DEMEANOUR_SMILING,
+    FRICTION_STRENGTH_ADVERBS,
     STRENGTH_PHRASES,
     TEMPLATES,
 )
 
-DECODER_VERSION = "0.1.0"
+DECODER_VERSION = "0.2.0"
 
 # Event types that become samples (spec 9.5-1).
 SAMPLE_TYPES = ("NOTICE", "LOST_SIGHT", "REACT", "CONTACT",
@@ -82,6 +86,22 @@ def _friction_stage(event: dict) -> int:
     return stage
 
 
+def _friction_bumper(event: dict) -> str:
+    """Who bumped into whom, from the log detail (spec 11.1 / 11.4).
+
+    Decided from detail.bumper only -- never from the shape of the
+    points. A strength-mode FRICTION without the field (a log written
+    before method B) raises instead of being silently decoded.
+    """
+    bumper = (event.get("detail") or {}).get("bumper")
+    if bumper not in ("A", "B"):
+        raise ValueError(
+            f"FRICTION event has no valid detail.bumper "
+            f"({_event_ref(event)}); strength-mode friction logs "
+            f"without a bumper cannot be decoded into samples")
+    return bumper
+
+
 def _other(ind_id: str) -> str:
     return "B" if ind_id == "A" else "A"
 
@@ -110,7 +130,11 @@ def visible_slots(event: dict, perspective: str) -> dict:
                 f"table for either individual ({_event_ref(event)}); "
                 f"cannot tell who took distance")
     if event["type"] == "FRICTION":
-        slots["strength"] = STRENGTH_PHRASES[_friction_stage(event)]
+        bumper = _friction_bumper(event)
+        slots["bumper"] = bumper
+        slots["bumped"] = _other(bumper)
+        slots["strength"] = FRICTION_STRENGTH_ADVERBS[
+            _friction_stage(event)]
     if event["type"] == "APOLOGY":
         slots["ap"] = event["actor"]
         slots["at"] = event["target"]
@@ -119,7 +143,14 @@ def visible_slots(event: dict, perspective: str) -> dict:
 
 def _pick(candidates: list[dict], run_key: str, event: dict,
           perspective: str, combo: str) -> dict:
-    seed_text = f"{run_key}:{event['step']}:{combo}:{perspective}"
+    if combo == "friction":
+        # Spec 11.6: one sentence per event, shared by both
+        # perspectives -- the perspective is not part of the pick, so
+        # the A-view and B-view samples of one friction event always
+        # use the same template (and hence the same text).
+        seed_text = f"{run_key}:{event['step']}:{combo}"
+    else:
+        seed_text = f"{run_key}:{event['step']}:{combo}:{perspective}"
     digest = hashlib.sha256(seed_text.encode("utf-8")).hexdigest()
     return candidates[int(digest, 16) % len(candidates)]
 
@@ -154,7 +185,11 @@ def decode_context(event: dict) -> str | None:
         return None
     slots = {"a": event["actor"], "t": event["target"]}
     if event["type"] == "FRICTION":
-        slots["strength"] = STRENGTH_PHRASES[_friction_stage(event)]
+        bumper = _friction_bumper(event)
+        slots["bumper"] = bumper
+        slots["bumped"] = _other(bumper)
+        slots["strength"] = FRICTION_STRENGTH_ADVERBS[
+            _friction_stage(event)]
     if event["type"] == "APOLOGY":
         result = (event.get("detail") or {}).get("result")
         slots["result"] = CONTEXT_APOLOGY_RESULT.get(result, "")

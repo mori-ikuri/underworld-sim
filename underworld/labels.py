@@ -1,4 +1,4 @@
-"""Label making for appraisal samples (spec v0.6 sections 9.4 / 10.1).
+"""Label making for appraisal samples (spec v0.7 sections 9.4 / 10.1 / 11.1).
 
 The label procedure is fixed by the spec:
 
@@ -10,9 +10,13 @@ The label procedure is fixed by the spec:
       -> drop zero dimensions
       -> all zero means verdict "no_change"
 
-For events that carry a stage (currently only FRICTION anger), the stage
-number itself (light 1 / normal 2 / strong 3) is used as the
-before-coefficient points instead of the sim's internal points (2/5/8).
+For staged events the stage number itself (light 1 / normal 2 / strong 3)
+is used as the before-coefficient points. For FRICTION (spec 11.1) the
+stage replacement applies *only* to the bumped side's anger (the sim's
+internal 2/5/8 become the stage); the side that bumped gets no anger
+points at all, and its sadness is already recorded as the stage value,
+so the caller passes friction_stage=None for that side and the recorded
+sadness goes through the ordinary procedure above.
 """
 
 from __future__ import annotations

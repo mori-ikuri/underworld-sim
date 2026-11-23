@@ -1,4 +1,4 @@
-"""Building appraisal samples from log v2 runs (spec sections 1-6, 9.4-9.5).
+"""Building appraisal samples from log v2 runs (spec v0.7, sections 1-6, 9.4-9.5, 11).
 
 A "run" is a directory (or in-memory bundle) holding a log v2 `log.jsonl`
 plus a `run.json` metadata file:
@@ -20,13 +20,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 
 from .decoder import DECODER_VERSION, decode, decode_context, is_sample_event
 from .emotions import DIMENSIONS
 from .labels import make_label
 
-SPEC_VERSION = "0.6"
-LABEL_VERSION = "rule-1"
+SPEC_VERSION = "0.7"
+LABEL_VERSION = "rule-2"
 RELATIONSHIP_SIM = "同じ箱庭で暮らす相手。"
 TARGET_CATEGORY_SIM = "相棒へ"
 
@@ -68,24 +69,35 @@ def assign_splits(run_metas: list[dict], *, train_ratio: float = 0.8,
     """Assign each run to train / val / test (spec section 4).
 
     Assignment is by coefficient *combination*: every run sharing a
-    combination lands on the same side, whole. Groups are taken in a
-    deterministic (split_seed) hash order and each is given to the side
-    with the largest remaining run deficit against the requested
-    ratios, except that a group is never spent on an already-filled
-    side when the groups left are exactly enough to give every still
-    empty side one group -- so with at least 3 combinations, validation
-    and test are never left empty. With fewer than 3 combinations some
-    side unavoidably stays empty. Deterministic in split_seed.
+    combination lands on the same side, whole. Groups are taken
+    largest first (ties broken by a deterministic (split_seed) hash
+    order, so a large group is placed while every side is still open
+    and cannot be pushed into a small side late, skewing the ratios)
+    and each is given to the side with the largest remaining run
+    deficit against the requested ratios, except that a group is never
+    spent on an already-filled side when the groups left are exactly
+    enough to give every still empty side one group -- so with at
+    least 3 combinations, validation and test are never left empty.
+    With 2 or fewer combinations some side unavoidably stays empty;
+    that case is reported with a warning. Deterministic in split_seed.
     Returns {run_id: side}.
     """
     groups: dict[str, list[str]] = {}
     for meta in run_metas:
         groups.setdefault(combo_signature(meta["coefficients"]), []).append(
             meta["run_id"])
+    if len(groups) <= 2:
+        warnings.warn(
+            f"assign_splits: only {len(groups)} coefficient "
+            f"combination(s) for {len(run_metas)} run(s); one of the "
+            f"validation / test sides will be empty",
+            UserWarning, stacklevel=2)
     ordered_sigs = sorted(
         groups,
-        key=lambda sig: hashlib.sha256(
-            f"{split_seed}:{sig}".encode("utf-8")).hexdigest())
+        key=lambda sig: (-len(groups[sig]),
+                         hashlib.sha256(
+                             f"{split_seed}:{sig}".encode(
+                                 "utf-8")).hexdigest()))
     ordered_groups = [sorted(groups[sig]) for sig in ordered_sigs]
     n = sum(len(g) for g in ordered_groups)
     targets = {"train": int(round(n * train_ratio)),
@@ -163,6 +175,18 @@ def build_samples(events: list[dict], run_meta: dict, side: str,
                     f"step={event['step']} day={event['day']} "
                     f"detail={event.get('detail')}; per-person "
                     f"friction logs cannot be built into samples")
+            if event["type"] == "FRICTION" and (
+                    (event.get("detail") or {}).get("bumper")
+                    not in ("A", "B")):
+                # Spec 11.4: a strength-mode FRICTION without the
+                # bumper field (a log written before method B) stops
+                # with a reason, like one without a strength stage.
+                raise ValueError(
+                    f"FRICTION event has no valid detail.bumper: "
+                    f"run_id={run_id} step={event['step']} "
+                    f"day={event['day']} detail={event.get('detail')}; "
+                    f"strength-mode friction logs without a bumper "
+                    f"cannot be built into samples")
             for perspective in sorted(appraisal):
                 record = appraisal[perspective]
                 if record.get("grudge"):
@@ -170,7 +194,13 @@ def build_samples(events: list[dict], run_meta: dict, side: str,
                     continue
                 other = "B" if perspective == "A" else "A"
                 stage = None
-                if event["type"] == "FRICTION":
+                if event["type"] == "FRICTION" and perspective != (
+                        event.get("detail") or {}).get("bumper"):
+                    # Spec 11.1 / 9.4: the stage replaces the recorded
+                    # anger points only for the side that was bumped
+                    # into. The bumper's side makes no anger points;
+                    # its sadness is already the stage value in
+                    # points_pre and goes through as recorded.
                     stage = (event.get("detail") or {}).get(
                         "strength_stage")
                 verdict, deltas, info = make_label(

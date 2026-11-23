@@ -1,0 +1,8 @@
+{
+  "apology": {
+    "fail_anger": 0.25
+  },
+  "contact": {
+    "friction_mode": "strength"
+  }
+}

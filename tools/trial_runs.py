@@ -1,14 +1,18 @@
-"""Trial data for the section 9.4 checks (spec v0.6).
+"""Trial data for the section 9.4 checks (spec v0.7).
 
 Generates, under runs/trial/ (git-ignored, never committed):
-  * 10 runs x 100 days, friction in "strength" mode, seeds 1-10, with a
-    random temperament (per-dimension coefficients from 0.5 / 1.0 / 1.5)
-    per run and individual
-  * 1 control run: seed 42, all coefficients 1.0, strength mode
-then builds appraisal samples from all runs and prints the aggregation
-the spec asks for (per-temperament point spread, clamp hits, per-run
-event counts, apology scenes), plus the apology / fight breakdowns
-requested at audit time.
+  * 10 runs x 100 days, seeds 1-10, with a random temperament
+    (per-dimension coefficients from 0.5 / 1.0 / 1.5) per run and
+    individual
+  * 1 control run: seed 42, all coefficients 1.0
+All runs use the data-generation config (config/datagen.json: friction
+in "strength" mode with method B, fail_anger 0.25 -- spec 11.3), read
+through load_config, never rewritten in code. The script then builds
+appraisal samples from all runs and prints the aggregation the spec
+asks for (per-temperament point spread including sadness, clamp hits,
+per-run event counts, apology scenes with the rejected share, bumper /
+bumped counts, keep_distance count), plus the apology / fight
+breakdowns requested at audit time.
 
 Usage:  python tools/trial_runs.py
 Standard library only.
@@ -42,9 +46,11 @@ def _config_hash(config: dict) -> str:
     ).hexdigest()
 
 
+DATAGEN_CONFIG = ROOT / "config" / "datagen.json"
+
+
 def _make_run(run_id: str, seed: int, coefficients: dict) -> dict:
-    config = load_config()
-    config["contact"]["friction_mode"] = "strength"
+    config = load_config(DATAGEN_CONFIG)
     for ind_id, coefs in coefficients.items():
         config["individuals"][ind_id]["coefficients"] = coefs
     sim = Simulation(config, seed=seed)
@@ -95,11 +101,20 @@ def main() -> int:
         "different": {"runs": 0, "apologies": 0, "zero_runs": 0},
     }
     rejected_total = 0
+    apology_total = 0
+    bumper_counts: Counter = Counter()
+    keep_distance_total = 0
     apology_target_anger: list[float] = []
     fight_over_500 = []
     for run in runs:
         meta, events = run["meta"], run["events"]
         counts = Counter(e["type"] for e in events)
+        apology_total += counts["APOLOGY"]
+        for e in events:
+            if e["type"] == "FRICTION":
+                bumper_counts[e["detail"]["bumper"]] += 1
+            if e["type"] == "CONTACT" and e.get("kind") == "keep_distance":
+                keep_distance_total += 1
         apologies = [e for e in events if e["type"] == "APOLOGY"]
         accepted = sum(1 for e in apologies
                        if e["detail"]["result"] == "accepted")
@@ -148,13 +163,26 @@ def main() -> int:
         print(f"{group}: runs={g['runs']}, apologies={g['apologies']}, "
               f"mean/run={mean:.2f}, zero-apology runs={g['zero_runs']}")
     print(f"rejected total: {rejected_total}")
+    if apology_total:
+        print(f"rejected share of all apologies: "
+              f"{rejected_total}/{apology_total} "
+              f"({rejected_total / apology_total * 100:.1f}%)")
     if apology_target_anger:
-        over = sum(1 for a in apology_target_anger if a > 0.5)
+        over = sum(1 for a in apology_target_anger if a > 0.25)
         print(f"apology target's anger just before the event: "
               f"n={len(apology_target_anger)}, "
               f"max={max(apology_target_anger):.3f}, "
               f"mean={sum(apology_target_anger) / len(apology_target_anger):.3f}, "
-              f"over fail_anger 0.5: {over}")
+              f"over fail_anger 0.25: {over}")
+
+    print()
+    print("== friction bumper / bumped (method B) ==")
+    friction_total = sum(bumper_counts.values())
+    for ind in ("A", "B"):
+        bumped = friction_total - bumper_counts[ind]
+        print(f"{ind}: bumper={bumper_counts[ind]}, bumped={bumped}")
+    print(f"friction total: {friction_total}")
+    print(f"keep_distance events total: {keep_distance_total}")
 
     print()
     print("== clamp hits (all samples) ==")

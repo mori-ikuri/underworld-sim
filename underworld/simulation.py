@@ -674,14 +674,21 @@ class Simulation:
         # accident first: the seed of anger, independent of goodwill.
         if self.rng.random() < float(cfg["contact"]["friction_probability"]):
             if cfg["contact"].get("friction_mode", "per_person") == "strength":
-                # New mode (spec section 9.3-1): the friction's strength is
-                # chosen once, on a 3-stage scale, and the same value lands
-                # on both individuals; how each side takes it is left to
-                # their coefficients. The stage is recorded in the log.
+                # Strength mode (spec sections 9.3-1, 11.1, 11.2 -- method
+                # B): the friction's strength is chosen once, on a 3-stage
+                # scale, and a fair coin (drawn once per friction, inside
+                # this mode only, so the per-person mode's random sequence
+                # is untouched) decides who bumped into whom. The bumped
+                # side takes the friction as before (anger from the stage
+                # points, trust -2); the side that bumped takes no anger
+                # and no trust change, only sadness equal to the stage.
+                # The bumper is recorded in the log detail.
                 weights = cfg["contact"].get(
                     "friction_strength_weights", [1, 1, 1])
                 stage_points = cfg["contact"].get(
                     "friction_strength_anger_points", [2, 5, 8])
+                sadness_points = cfg["contact"].get(
+                    "friction_strength_sadness_points", [1, 2, 3])
                 pick = self.rng.random() * float(sum(weights))
                 stage = 0
                 cumulative = 0.0
@@ -692,19 +699,28 @@ class Simulation:
                         break
                 else:
                     stage = len(weights) - 1
+                bumper = a if self.rng.random() < 0.5 else b
+                bumped = b if bumper is a else a
                 effects = {}
-                for ind in (a, b):
-                    table = dict(deltas["friction"])
-                    table["anger"] = stage_points[stage]
-                    eff = self.apply_table(ind, table, grudge_discount=False,
-                                           table_name="friction")
-                    if eff:
-                        effects[ind.id] = eff
+                table = dict(deltas["friction"])
+                table["anger"] = stage_points[stage]
+                eff = self.apply_table(bumped, table, grudge_discount=False,
+                                       table_name="friction")
+                if eff:
+                    effects[bumped.id] = eff
+                eff = self.apply_table(
+                    bumper, {"sadness": sadness_points[stage]},
+                    grudge_discount=False, table_name="friction_bumper")
+                if eff:
+                    effects[bumper.id] = eff
                 self._log("FRICTION", a.id, b.id, effects=effects or None,
                           detail={"consecutive_contacts":
                                   self.pair_consecutive_contacts,
                                   "strength_stage": stage + 1,
-                                  "strength_anger_points": stage_points[stage]},
+                                  "strength_anger_points": stage_points[stage],
+                                  "strength_sadness_points":
+                                      sadness_points[stage],
+                                  "bumper": bumper.id},
                           appraisal=self._take_capture())
                 return
             # Default mode (unchanged): each side takes the accident a

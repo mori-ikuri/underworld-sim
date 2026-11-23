@@ -20,7 +20,8 @@ Rules these templates follow (spec sections 1, 2, 9.5-4):
 Slots: {p} perspective individual, {o} the other individual,
 {demeanour} greeting partner demeanour phrase, {strength} friction
 strength phrase, {who} distance-taker clause for keep_distance,
-{ap} apologiser, {at} apologised-to.
+{ap} apologiser, {at} apologised-to, {bumper} the individual who
+bumped (friction, spec 11.6), {bumped} the individual who was bumped.
 """
 
 from __future__ import annotations
@@ -119,15 +120,29 @@ TEMPLATES: dict[str, list[dict]] = {
          "pattern": "{who}間を空けた。",
          "axis": {"subject_drop": False, "register": "plain"}},
     ],
+    # Friction (spec 11.6, v0.7): observer's viewpoint, both names,
+    # who bumped into whom is stated. The same sentence serves both
+    # perspectives of an event. No "〜てしまう" / "〜られる" forms and
+    # no subject dropping (the bumper must stay visible). The v1-v3
+    # ids are retired, never reused: v4 onward is the observer form.
     "friction": [
-        {"id": "friction/v1", "side": "train",
-         "pattern": "{p}と{o}は{strength}。",
+        {"id": "friction/v4", "side": "train",
+         "pattern": "{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v2", "side": "val",
-         "pattern": "{o}と{p}は{strength}。",
+        {"id": "friction/v5", "side": "train",
+         "pattern": "{bumper}は{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v3", "side": "test",
-         "pattern": "接触の拍子に、{p}と{o}は{strength}。",
+        {"id": "friction/v6", "side": "val",
+         "pattern": "{bumped}に{bumper}が{strength}ぶつかった。",
+         "axis": {"subject_drop": False, "register": "plain"}},
+        {"id": "friction/v7", "side": "val",
+         "pattern": "{bumper}が{strength}{bumped}にぶつかった。",
+         "axis": {"subject_drop": False, "register": "plain"}},
+        {"id": "friction/v8", "side": "test",
+         "pattern": "接触の拍子に、{bumper}が{bumped}に{strength}ぶつかった。",
+         "axis": {"subject_drop": False, "register": "plain"}},
+        {"id": "friction/v9", "side": "test",
+         "pattern": "そのとき、{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
     ],
     "fight": [
@@ -171,6 +186,15 @@ STRENGTH_PHRASES = {
     3: "強くぶつかった",
 }
 
+# Friction strength as an adverb, for the observer-form templates
+# (spec 11.6: "{bumper}が{bumped}に{strength}ぶつかった" shape).
+# One fixed word per stage, one-to-one with the stage names.
+FRICTION_STRENGTH_ADVERBS = {
+    1: "軽く",
+    2: "ふつうに",
+    3: "強く",
+}
+
 # Greeting partner demeanour phrases (spec 9.5-4: must appear in the text).
 DEMEANOUR_SMILING = "にこやか"
 DEMEANOUR_PLAIN = "ふつうの様子"
@@ -179,6 +203,8 @@ DEMEANOUR_PLAIN = "ふつうの様子"
 # Context forms: compact factual renderings used only for recent_context
 # (spec section 6). One form per combo; slots are the log's actor {a} and
 # target {t}, plus {strength} / {result} where the combo carries them.
+# Friction uses the same observer form as the event templates (spec
+# 11.6): {bumper} / {bumped} names and the {strength} adverb.
 # ---------------------------------------------------------------------------
 
 CONTEXT_TEMPLATES: dict[str, str] = {
@@ -190,7 +216,7 @@ CONTEXT_TEMPLATES: dict[str, str] = {
     "contact_greet": "{a}と{t}は挨拶を交わした。",
     "contact_together": "{a}と{t}は一緒に過ごした。",
     "contact_keep_distance": "{a}と{t}は距離を取った。",
-    "friction": "{a}と{t}は{strength}。",
+    "friction": "{bumper}が{bumped}に{strength}ぶつかった。",
     "fight": "{a}と{t}は喧嘩になった。",
     "apology": "{a}が{t}に謝り、{result}。",
 }
