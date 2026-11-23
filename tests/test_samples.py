@@ -15,10 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from underworld.decoder import decode
+from underworld.decoder import decode, decode_context
 from underworld.labels import make_label, round_half_away_from_zero
 from underworld.samples import assign_splits, build_samples, combo_signature
-from underworld.templates import TEMPLATES
+from underworld.templates import FRICTION_STRENGTH_ADVERBS, TEMPLATES
 
 COEF_FLAT = {"joy": 1.0, "sadness": 1.0, "anger": 1.0, "fear": 1.0,
              "surprise": 1.0, "affection": 1.0, "trust": 1.0, "fatigue": 1.0}
@@ -225,8 +225,89 @@ class TestDecoder(unittest.TestCase):
             self.assertIn("A", text_a)
             self.assertIn("B", text_a)
             self.assertFalse(axis_a["subject_drop"])
-            for banned in ("しまう", "しまっ", "られ"):
+            for banned in ("しまう", "しまっ", "られ", "ふつうに"):
                 self.assertNotIn(banned, text_a)
+
+    def _friction_event(self, stage):
+        points = {1: 2.0, 2: 5.0, 3: 8.0}[stage]
+        return _event("FRICTION", appraisal={
+            "A": _record({"sadness": float(stage)},
+                         tables=["friction_bumper"]),
+            "B": _record({"anger": points, "trust": -2.0},
+                         tables=["friction"])},
+            detail={"strength_stage": stage,
+                    "strength_anger_points": int(points),
+                    "strength_sadness_points": stage, "bumper": "A",
+                    "consecutive_contacts": 1})
+
+    def test_friction_middle_stage_has_no_strength_word(self):
+        # Decision (patch 4): the middle stage carries no strength
+        # word at all -- the sentence is just "...ぶつかった。".
+        # The light / strong stages keep their words.
+        event = self._friction_event(2)
+        for side in ("train", "val", "test"):
+            text, _tid, _axis = decode(event, "A", side, "r1")
+            for word in ("軽く", "強く", "ふつうに"):
+                self.assertNotIn(word, text, (side, text))
+            self.assertTrue(text.endswith("ぶつかった。"), text)
+        for stage, word in ((1, "軽く"), (3, "強く")):
+            text, _tid, _axis = decode(
+                self._friction_event(stage), "A", "train", "r1")
+            self.assertIn(word, text)
+
+    def test_friction_context_has_no_banned_or_strength_words(self):
+        # recent_context friction uses the same shape: no middle
+        # adverb anywhere, and no strength word at the middle stage.
+        for stage in (1, 2, 3):
+            text = decode_context(self._friction_event(stage))
+            self.assertIsNotNone(text)
+            for banned in ("しまう", "しまっ", "られ", "ふつうに"):
+                self.assertNotIn(banned, text, (stage, text))
+            if stage == 2:
+                for word in ("軽く", "強く"):
+                    self.assertNotIn(word, text)
+
+    def test_friction_texts_have_no_chikazuku(self):
+        # Audit fix (patch 4): friction sentences must not use the
+        # word "近づ" -- most frictions happen while the two are
+        # already next to each other with contact continuing, and
+        # "近づく" is REACT's word, so it would read as a different
+        # event mixed in. Checked on both the event text (every
+        # friction template, every stage, plus the decoded text of
+        # each side) and the recent_context friction form.
+        for stage in (1, 2, 3):
+            strength = FRICTION_STRENGTH_ADVERBS[stage]
+            for t in TEMPLATES["friction"]:
+                text = t["pattern"].format(
+                    bumper="A", bumped="B", strength=strength)
+                self.assertNotIn("近づ", text, (stage, t["id"], text))
+            event = self._friction_event(stage)
+            for side in ("train", "val", "test"):
+                text, _tid, _axis = decode(event, "A", side, "r1")
+                self.assertNotIn("近づ", text, (stage, side, text))
+            context = decode_context(event)
+            self.assertIsNotNone(context)
+            self.assertNotIn("近づ", context, (stage, context))
+
+    def test_friction_texts_disjoint_across_sides_at_every_stage(self):
+        # At every stage, no friction sentence of one split side may
+        # equal a sentence of another side (the middle stage has no
+        # strength word, so the per-side wording itself must differ).
+        for stage in (1, 2, 3):
+            strength = FRICTION_STRENGTH_ADVERBS[stage]
+            texts_by_side = {}
+            for side in ("train", "val", "test"):
+                texts = {
+                    t["pattern"].format(bumper="A", bumped="B",
+                                        strength=strength)
+                    for t in TEMPLATES["friction"] if t["side"] == side}
+                texts_by_side[side] = texts
+            sides = list(texts_by_side)
+            for i, side in enumerate(sides):
+                for other in sides[i + 1:]:
+                    self.assertFalse(
+                        texts_by_side[side] & texts_by_side[other],
+                        (stage, side, other))
 
     def test_template_choice_ignores_perspective_state(self):
         event = _event("NOTICE", "spot", appraisal={"A": _record()})
@@ -303,7 +384,7 @@ class TestBuildSamples(unittest.TestCase):
             self.assertEqual(sample["spec_version"], "0.7")
             self.assertEqual(sample["label_version"], "rule-2")
             self.assertEqual(
-                sample["provenance"]["decoder_version"], "0.2.0")
+                sample["provenance"]["decoder_version"], "0.3.0")
 
     def test_orientation(self):
         events = [_event("REACT", "avoided",

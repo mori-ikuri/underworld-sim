@@ -27,11 +27,10 @@ from .templates import (
     DEMEANOUR_PLAIN,
     DEMEANOUR_SMILING,
     FRICTION_STRENGTH_ADVERBS,
-    STRENGTH_PHRASES,
     TEMPLATES,
 )
 
-DECODER_VERSION = "0.2.0"
+DECODER_VERSION = "0.3.0"
 
 # Event types that become samples (spec 9.5-1).
 SAMPLE_TYPES = ("NOTICE", "LOST_SIGHT", "REACT", "CONTACT",
@@ -78,7 +77,7 @@ def _tables(event: dict, ind_id: str) -> list:
 
 def _friction_stage(event: dict) -> int:
     stage = (event.get("detail") or {}).get("strength_stage")
-    if stage not in STRENGTH_PHRASES:
+    if stage not in FRICTION_STRENGTH_ADVERBS:
         raise ValueError(
             f"FRICTION event has no valid detail.strength_stage "
             f"({_event_ref(event)}); per-person friction logs cannot "

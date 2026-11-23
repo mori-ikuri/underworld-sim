@@ -124,24 +124,27 @@ TEMPLATES: dict[str, list[dict]] = {
     # who bumped into whom is stated. The same sentence serves both
     # perspectives of an event. No "〜てしまう" / "〜られる" forms and
     # no subject dropping (the bumper must stay visible). The v1-v3
-    # ids are retired, never reused: v4 onward is the observer form.
+    # ids are retired, never reused: v4 onward is the observer form,
+    # and v4-v9 are retired as well -- v10 onward carries no strength
+    # word at the middle stage (see FRICTION_STRENGTH_ADVERBS), with
+    # per-side wording that stays distinct at every stage.
     "friction": [
-        {"id": "friction/v4", "side": "train",
+        {"id": "friction/v10", "side": "train",
          "pattern": "{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v5", "side": "train",
+        {"id": "friction/v11", "side": "train",
          "pattern": "{bumper}は{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v6", "side": "val",
-         "pattern": "{bumped}に{bumper}が{strength}ぶつかった。",
+        {"id": "friction/v12", "side": "val",
+         "pattern": "{bumped}に、{bumper}が{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v7", "side": "val",
-         "pattern": "{bumper}が{strength}{bumped}にぶつかった。",
+        {"id": "friction/v13", "side": "val",
+         "pattern": "二人の間で、{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v8", "side": "test",
+        {"id": "friction/v14", "side": "test",
          "pattern": "接触の拍子に、{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
-        {"id": "friction/v9", "side": "test",
+        {"id": "friction/v15", "side": "test",
          "pattern": "そのとき、{bumper}が{bumped}に{strength}ぶつかった。",
          "axis": {"subject_drop": False, "register": "plain"}},
     ],
@@ -178,20 +181,19 @@ TEMPLATES: dict[str, list[dict]] = {
     ],
 }
 
-# Friction strength phrases: exactly one fixed phrase per stage
-# (spec 9.3-1 -- the stage is a visible fact, so stating it is not a leak).
-STRENGTH_PHRASES = {
-    1: "軽くぶつかった",
-    2: "ぶつかった",
-    3: "強くぶつかった",
-}
-
 # Friction strength as an adverb, for the observer-form templates
 # (spec 11.6: "{bumper}が{bumped}に{strength}ぶつかった" shape).
-# One fixed word per stage, one-to-one with the stage names.
+# This table is the single source for the strength wording: the
+# decoder both validates the stage against its keys and fills the
+# {strength} slot from it. The middle stage carries NO strength
+# word (the v0.6 way of thinking, kept by decision): its adverb is
+# deliberately absent from friction sentences, because it can read
+# as "as a matter of course" and shift the blame onto the other
+# side -- the same reason spec 11.6 drops the passive / "〜てしまう"
+# forms.
 FRICTION_STRENGTH_ADVERBS = {
     1: "軽く",
-    2: "ふつうに",
+    2: "",
     3: "強く",
 }
 

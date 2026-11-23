@@ -6,8 +6,8 @@ Generates, under runs/trial/ (git-ignored, never committed):
     individual
   * 1 control run: seed 42, all coefficients 1.0
 All runs use the data-generation config (config/datagen.json: friction
-in "strength" mode with method B, fail_anger 0.25 -- spec 11.3), read
-through load_config, never rewritten in code. The script then builds
+in "strength" mode with method B and the datagen fail_anger --
+spec 11.3), read through load_config, never rewritten in code. The script then builds
 appraisal samples from all runs and prints the aggregation the spec
 asks for (per-temperament point spread including sadness, clamp hits,
 per-run event counts, apology scenes with the rejected share, bumper /
@@ -47,6 +47,10 @@ def _config_hash(config: dict) -> str:
 
 
 DATAGEN_CONFIG = ROOT / "config" / "datagen.json"
+
+# The fail_anger threshold for the "over fail_anger" count below is
+# read from the datagen config, never written into this script.
+FAIL_ANGER = load_config(DATAGEN_CONFIG)["apology"]["fail_anger"]
 
 
 def _make_run(run_id: str, seed: int, coefficients: dict) -> dict:
@@ -168,12 +172,12 @@ def main() -> int:
               f"{rejected_total}/{apology_total} "
               f"({rejected_total / apology_total * 100:.1f}%)")
     if apology_target_anger:
-        over = sum(1 for a in apology_target_anger if a > 0.25)
+        over = sum(1 for a in apology_target_anger if a > FAIL_ANGER)
         print(f"apology target's anger just before the event: "
               f"n={len(apology_target_anger)}, "
               f"max={max(apology_target_anger):.3f}, "
               f"mean={sum(apology_target_anger) / len(apology_target_anger):.3f}, "
-              f"over fail_anger 0.25: {over}")
+              f"over fail_anger {FAIL_ANGER}: {over}")
 
     print()
     print("== friction bumper / bumped (method B) ==")
